@@ -13,13 +13,8 @@ export default class {
 
 	async registerApplicationHandler(req, res, next) {
 		//TODO Need to be authenticated
-		await this.registerApplication({
-			name: 'New Used Media',
-			logo: 'https://dev.newusedmedia.com/static/media/logo_white.e0ee2117.png',
-			redirectURI: 'http://localhost:2000/auth/smash/callback',
-			userId: 123,
-			website: 'www.newusedmedia.com'
-		})
+		let { name, logo, redirectURI, userId, website } = req.body
+		await this.registerApplication({ name, logo, redirectURI, userId, website })
 		res.send('Success!')
 	}
 
@@ -50,50 +45,58 @@ export default class {
 	}
 
 	async generateAuthorizationCode({ clientId, userId, scope }) {
-		let code = 'smash_authorization_code_' + crypto.randomBytes(10).toString('hex')
+		let code = 'smash_authorization_code_' + 'fixo' //crypto.randomBytes(32).toString('hex')
 
 		this.saveAuthorizationCode({ code, clientId, userId, scope })
 		return code
 	}
 
 	async generateAccessToken({ application, clientId, scope }) {
-		let accessToken = 'smash_access_token_' + crypto.randomBytes(10).toString('hex')
+		let accessToken = 'smash_access_token_' + crypto.randomBytes(32).toString('hex')
 		let accessTokenExpiresOn = moment().add(1, 'hour')
-		let refreshToken = 'smash_refresh_token_' + crypto.randomBytes(10).toString('hex')
+		let refreshToken = 'smash_refresh_token_' + crypto.randomBytes(32).toString('hex')
 		let refreshTokenExpiresOn = moment().add(30, 'days')
 		let userId = application.userId
 
-		return this.saveAccessToken({
-			accessToken,
-			accessTokenExpiresOn,
-			refreshToken,
-			refreshTokenExpiresOn,
-			clientId,
-			userId,
-			scope
-		})
+		let obj = { accessToken, accessTokenExpiresOn, refreshToken, refreshTokenExpiresOn, clientId, userId, scope }
+		return this.saveAccessToken(obj)
 	}
 
 	async token(req, res, next) {
-		let { grant_type, code, redirect_uri, client_id, client_secret } = req.body
-
-		let application = await this.getApplication(client_id)
-		if (!application) {
-			return res.status(400).send('Client not found')
-		}
-
-		if (application.clientSecret !== client_secret) {
-			return res.status(400).send('Secret mismatch')
-		}
-
-		let authorizationCode = await this.getAuthorizationCode(code)
-		if (!authorizationCode) {
-			return res.status(400).send('Authorization code not found')
-		}
+		let { grant_type } = req.body
 
 		if (grant_type === 'authorization_code') {
+			let { code, client_id } = req.body
+			let application = await this.getApplication(client_id)
+			if (!application) {
+				return res.status(400).send('Client not found')
+			}
+
+			let authorizationCode = await this.getAuthorizationCode(code)
+			if (!authorizationCode) {
+				return res.status(400).send('Authorization code not found')
+			}
+
 			let accessToken = await this.generateAccessToken({ application, clientId: client_id })
 			return res.send(accessToken)
+		}
+		if (grant_type === 'password') {
+			let { username, password } = req.body
+			//TODO verify username and password
+			return res.send('TODO')
+		}
+		if (grant_type === 'client_credentials') {
+			let { client_secret, client_id } = req.body
+			if (application.clientSecret !== client_secret) {
+				return res.status(400).send('Secret mismatch')
+			}
+		}
+		if (grant_type === 'refresh_token') {
+			let { refresh_token } = req.body
+			let authorizationCode = await this.getAccessTokenByRefreshToken(refresh_token)
+			if (!authorizationCode) {
+				return res.status(400).send('Authorization code not found')
+			}
 		}
 	}
 
@@ -106,8 +109,8 @@ export default class {
 	 * @param {string} application.userId - The employee's department.
 	 */
 	async registerApplication({ name, website, logo, redirectURI, userId }) {
-		let clientID = 'smash_client_id_' + crypto.randomBytes(10).toString('hex')
-		let clientSecret = 'smash_client_secret_' + crypto.randomBytes(10).toString('hex')
+		let clientID = 'smash_client_id_' + 'fixo' //crypto.randomBytes(32).toString('hex')
+		let clientSecret = 'smash_client_secret_' + 'fixo' //crypto.randomBytes(32).toString('hex')
 
 		this.verifyIfRedirectUriIsValid(redirectURI)
 
@@ -115,8 +118,9 @@ export default class {
 	}
 
 	verifyIfRedirectUriIsValid(redirectURI) {
-		if (false) {
-			throw new Error('Must implement error verification') //TODO implementar maybe not 404 on get
+		let reg = /.+:\/\/.+/
+		if (!reg.test(redirectURI)) {
+			throw new Error('Invalid uri') //TODO implementar maybe not 404 on get
 		}
 	}
 
@@ -173,6 +177,10 @@ export default class {
 	}
 
 	async getUser(userId) {
+		throw new Error('Must implement')
+	}
+
+	async getAccessTokenByRefreshToken(refreshToken) {
 		throw new Error('Must implement')
 	}
 }
