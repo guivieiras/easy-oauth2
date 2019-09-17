@@ -82,7 +82,12 @@ export default class {
 		}
 		if (grant_type === 'password') {
 			let { username, password } = req.body
-			//TODO verify username and password
+			let result = await this.verifyUsernameAndPassword(username, password)
+			if (!result) {
+				return res.status(400).send('User not found or password invalid')
+			}
+
+			let accessToken = await this.generateAccessToken({ application, clientId: client_id })
 			return res.send('TODO')
 		}
 		if (grant_type === 'client_credentials') {
@@ -169,6 +174,10 @@ export default class {
 	}
 
 	async renderAuthorizationView() {
+		throw new Error('Must implement')
+	}
+
+	async verifyUsernameAndPassword(username, password) {
 		throw new Error('Must implement')
 	}
 
