@@ -2,6 +2,10 @@ import crypto from 'crypto'
 import moment from 'moment'
 import axios from 'axios'
 
+/**
+ * @class
+ * @alias Easy
+ */
 export default class {
 	constructor(app) {
 		this.app = app
@@ -13,8 +17,8 @@ export default class {
 
 	async registerApplicationHandler(req, res, next) {
 		//TODO Need to be authenticated
-		let { name, logo, redirectURI, userId, website } = req.body
-		await this.registerApplication({ name, logo, redirectURI, userId, website })
+		let { name, logo, redirectURI, userId, website, clientType } = req.body
+		await this.registerApplication({ name, logo, redirectURI, userId, website, clientType })
 		res.send('Success!')
 	}
 
@@ -51,75 +55,111 @@ export default class {
 		return code
 	}
 
-	async generateAccessToken({ application, clientId, scope }) {
+	async generateAccessToken({ clientId, scope, grantType, userId }) {
 		let accessToken = 'smash_access_token_' + crypto.randomBytes(32).toString('hex')
 		let accessTokenExpiresOn = moment().add(1, 'hour')
-		let refreshToken = 'smash_refresh_token_' + crypto.randomBytes(32).toString('hex')
-		let refreshTokenExpiresOn = moment().add(30, 'days')
-		let userId = application.userId
+		let refreshToken
+		let refreshTokenExpiresOn
+		if (grantType !== 'client_credentials') {
+			refreshToken = 'smash_refresh_token_' + crypto.randomBytes(32).toString('hex')
+			refreshTokenExpiresOn = moment().add(30, 'days')
+		}
 
 		let obj = { accessToken, accessTokenExpiresOn, refreshToken, refreshTokenExpiresOn, clientId, userId, scope }
 		return this.saveAccessToken(obj)
 	}
 
 	async token(req, res, next) {
-		let { grant_type } = req.body
+		let { grant_type, client_id, client_secret } = req.body
+
+		let application = await this.getApplication(client_id)
+		if (!application) {
+			return res.status(400).send('Client not found')
+		}
+		if (application.clientType === 'confidential' && application.clientSecret !== client_secret) {
+			return res.status(400).send('Invalid secret mismatch')
+		}
 
 		if (grant_type === 'authorization_code') {
-			let { code, client_id } = req.body
-			let application = await this.getApplication(client_id)
-			if (!application) {
-				return res.status(400).send('Client not found')
-			}
+			let { code } = req.body
 
 			let authorizationCode = await this.getAuthorizationCode(code)
 			if (!authorizationCode) {
 				return res.status(400).send('Authorization code not found')
 			}
 
-			let accessToken = await this.generateAccessToken({ application, clientId: client_id })
-			return res.send(accessToken)
+			let { userId, scope } = authorizationCode
+			let accessToken = await this.generateAccessToken({ ...application, grantType: grant_type, scope, userId })
+			return res.send({
+				access_token: accessToken.accessToken,
+				token_type: 'bearer',
+				expires_in: 3600,
+				refresh_token: accessToken.refreshToken
+			})
 		}
 		if (grant_type === 'password') {
-			let { username, password } = req.body
-			let result = await this.verifyUsernameAndPassword(username, password)
-			if (!result) {
+			let { username, password, scope } = req.body
+			let userId = await this.verifyUsernameAndPassword(username, password)
+			if (!userId) {
 				return res.status(400).send('User not found or password invalid')
 			}
 
-			let accessToken = await this.generateAccessToken({ application, clientId: client_id })
-			return res.send('TODO')
+			let accessToken = await this.generateAccessToken({ ...application, grantType: grant_type, scope, userId })
+			return res.send({
+				access_token: accessToken.accessToken,
+				token_type: 'bearer',
+				expires_in: 3600,
+				refresh_token: accessToken.refreshToken
+			})
 		}
 		if (grant_type === 'client_credentials') {
-			let { client_secret, client_id } = req.body
-			if (application.clientSecret !== client_secret) {
-				return res.status(400).send('Secret mismatch')
+			let { scope } = req.body
+			if (application.clientType === 'public') {
+				return res.status(400).send('Only enabled to confidential clients')
 			}
+
+			let accessToken = await this.generateAccessToken({ ...application, grantType: grant_type, scope })
+			res.send({
+				access_token: accessToken.accessToken,
+				token_type: 'bearer',
+				expires_in: 3600
+			})
 		}
 		if (grant_type === 'refresh_token') {
 			let { refresh_token } = req.body
-			let authorizationCode = await this.getAccessTokenByRefreshToken(refresh_token)
-			if (!authorizationCode) {
-				return res.status(400).send('Authorization code not found')
+			let oldAccessToken = await this.getAccessTokenByRefreshToken(client_id, refresh_token)
+			if (!oldAccessToken) {
+				return res.status(400).send('Refresh token not found')
 			}
+			let { scope } = oldAccessToken
+			let accessToken = await this.generateAccessToken({ ...application, grantType: grant_type, scope })
+			res.send({
+				access_token: accessToken.accessToken,
+				token_type: 'bearer',
+				expires_in: 3600,
+				refresh_token: accessToken.refreshToken
+			})
+			await this.invalidateRefreshToken(client_id, refresh_token)
 		}
 	}
 
-	/**
-	 * @param {Object} application - The employee who is responsible for the project.
-	 * @param {string} application.name - The name of the employee.
-	 * @param {string} application.website - The employee's department.
-	 * @param {string} application.logo - The employee's department.
-	 * @param {string} application.redirectURI - The employee's department.
-	 * @param {string} application.userId - The employee's department.
-	 */
-	async registerApplication({ name, website, logo, redirectURI, userId }) {
-		let clientID = 'smash_client_id_' + 'fixo' //crypto.randomBytes(32).toString('hex')
+	async registerApplication({ name, website, logo, redirectURI, devUserId, clientType }) {
+		let clientId = 'smash_client_id_' + 'fixo' //crypto.randomBytes(32).toString('hex')
 		let clientSecret = 'smash_client_secret_' + 'fixo' //crypto.randomBytes(32).toString('hex')
 
 		this.verifyIfRedirectUriIsValid(redirectURI)
 
-		await this.saveApplication({ name, website, logo, redirectURI, userId, clientID, clientSecret })
+		if (!['confidential', 'public'].includes(clientType)) {
+			throw new Error('Invalid client type')
+		}
+
+		//TODO validate more things, like dont allow two apps with same name
+
+		await this.saveApplication({ name, website, logo, redirectURI, devUserId, clientId, clientSecret, clientType })
+	}
+
+	static get INVALID_REFRESH() {
+		return 'INVALID'
 	}
 
 	verifyIfRedirectUriIsValid(redirectURI) {
@@ -145,11 +185,11 @@ export default class {
 
 	// Must implement
 
-	async saveApplication({ name, website, logo, redirectURI, userId, clientId, clientSecret }) {
+	async saveApplication({ name, website, logo, redirectURI, devUserId, clientId, clientSecret, clientType }) {
 		throw new Error('Must implement')
 	}
 
-	async getApplication(clientID) {
+	async getApplication(clientId) {
 		throw new Error('Must implement')
 	}
 
@@ -189,7 +229,11 @@ export default class {
 		throw new Error('Must implement')
 	}
 
-	async getAccessTokenByRefreshToken(refreshToken) {
+	async getAccessTokenByRefreshToken(clientId, refreshToken) {
+		throw new Error('Must implement')
+	}
+
+	async invalidateRefreshToken(clientId, refreshToken) {
 		throw new Error('Must implement')
 	}
 }
