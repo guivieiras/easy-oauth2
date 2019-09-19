@@ -17,7 +17,11 @@ export default class {
 
 	async authorization(req, res, next) {
 		let { client_id, scope, state, response_type, redirect_uri } = req.body
-		let userId = 'user123' //TODO Get from somewhere cookies or auth headers, this can go to the example app
+		let userId = req.userId
+
+		if (!req.userId) {
+			res.redirect('http://localhost:3000/login')
+		}
 
 		let application = await this.getApplication(client_id)
 		if (!application) {
@@ -172,20 +176,6 @@ export default class {
 		if (!['confidential', 'public'].includes(clientType)) {
 			throw new Error('Invalid client type')
 		}
-	}
-
-	initViews() {
-		this.app.get('/authorize-frontend', [
-			this.authenticatedMiddleware.bind(this),
-			this.renderAuthorizationView.bind(this)
-		])
-	}
-
-	async authenticatedMiddleware(req, res, next) {
-		if (req.query.logged !== 'yes') {
-			return next()
-		}
-		res.status(400).send('Not authenticated')
 	}
 
 	// Must implement
